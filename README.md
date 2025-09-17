@@ -69,3 +69,16 @@ python3 main.py
 
 ## 5. Citation
 Please cite our paper if our contributions benefit your research.
+
+```
+@INPROCEEDINGS{zhao2025,
+  author={Zhao, Shiju and Zheng, Jiaqi and Chen, Guihai},
+  booktitle={2025 IEEE/ACM 33rd International Symposium on Quality of Service (IWQoS)}, 
+  title={Rethinking Failure-Tolerant Traffic Engineering with Demand Prediction}, 
+  year={2025},
+  volume={},
+  number={},
+  pages={1-6},
+  keywords={Uncertainty;Network topology;Quality of service;Telecommunication traffic;Production;Machine learning;Predictive models;Prediction algorithms;Topology;Optimization;failure tolerance;traffic engineering;machine learning;decision-focused learning},
+  doi={10.1109/IWQoS65803.2025.11143354}}
+```
