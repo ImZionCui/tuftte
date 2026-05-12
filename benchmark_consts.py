@@ -2,14 +2,15 @@
 Constants for benchmarking
 """
 
-# # Abilene parameters
+# # # Abilene parameters
 # TOPOLOGY = "Abilene"
 # DEMAND_SCALE = 15
 # START = 16
-# STOP = 20.2
+# # STOP = 20.2
+# STOP = 22
 # STEP = 0.2
 
-# GEANT parameters
+#GEANT parameters
 TOPOLOGY = "GEANT"
 DEMAND_SCALE = 1
 START = 0.2

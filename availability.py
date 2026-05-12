@@ -11,14 +11,15 @@ from algorithms.TESolver import TESolver
 from algorithms.FFCSolver import FFCSolver
 from algorithms.TEAVARSolver import TEAVARSolver
 from algorithms.DoteSolver import DoteSolver
-from algorithms.TUFTTESolver import TUFTTESolver, Availability
+from algorithms.TUFTTEParameterSolver import TUFTTEParameterSolver, Availability
+from algorithms.TUFTTEPredictSolver import TUFTTEPredictSolver
 
 import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
 
 PREDICTION_BASED_METHODS = ["MaxMin", "MLU", "FFC", "TEAVAR"]
-DIRECT_OPTIMIZATION = ["DOTE", "TUFTTE"]
+DIRECT_OPTIMIZATION = ["DOTE", "TUFTTE-Param", "TUFTTE-Orig"]
 
 def availability_plot(topology, num_dms_for_train=None, num_dms_for_test=None, cutoff=1e-6, hist_len=12, plot=False, start=0.1, step=0.01, stop=0.4):
     """
@@ -57,8 +58,12 @@ def availability_plot(topology, num_dms_for_train=None, num_dms_for_test=None, c
         start += step
         scales.append(start)
 
+    print("\n=== Demand Scales ===")
+    print(", ".join([f"{s:.3f}" for s in scales]))
+
     predicted_tms = predict_traffic_matrix(network.train_hists._tms, network.test_hists._tms, hist_len, method=RF)
     for method in PREDICTION_BASED_METHODS:
+        print(f"\n[Prediction-based] {method}")
         for demand_scale in scales:
             network.set_scale(demand_scale)
             for tm in predicted_tms:
@@ -85,14 +90,24 @@ def availability_plot(topology, num_dms_for_train=None, num_dms_for_test=None, c
 
             _, availability = calculate_risk(network, hist_len)
             network.clear_sol()
-            method_loss[method].append(np.mean(availability))
+            avg_availability = np.mean(availability)
+            method_loss[method].append(avg_availability)
+            print(f"  scale={demand_scale:.3f} -> availability={avg_availability:.8f}")
+
+    # Use a fixed pre-trained scale/suffix for TUFTTE models
+    train_scale = 15.0
+    train_suffix = "_quick"
 
     for method in DIRECT_OPTIMIZATION:
+        print(f"\n[Direct-optimization] {method}")
         if method == "DOTE":
             solver = DoteSolver(network)
-        elif method == "TUFTTE":
-            network.set_scale(stop)
-            solver = TUFTTESolver(network, type=Availability)
+        elif method == "TUFTTE-Param":
+            network.set_scale(train_scale)
+            solver = TUFTTEParameterSolver(network, type=Availability, suffix=train_suffix)
+        elif method == "TUFTTE-Orig":
+            network.set_scale(train_scale)
+            solver = TUFTTEPredictSolver(network, type=Availability, suffix=train_suffix)
         else:
             print(f"Method {method} is not defined!")
             return
@@ -101,11 +116,25 @@ def availability_plot(topology, num_dms_for_train=None, num_dms_for_test=None, c
         for demand_scale in scales:
             network.set_scale(demand_scale)
             _, availability = calculate_risk(network, hist_len)
-            method_loss[method].append(np.mean(availability))
+            avg_availability = np.mean(availability)
+            method_loss[method].append(avg_availability)
+            print(f"  scale={demand_scale:.3f} -> availability={avg_availability:.8f}")
 
         network.clear_sol()
         
     print(method_loss)
+
+    # 打印按 scale 汇总的 availability 表
+    print("\n=== Availability by Scale (Summary) ===")
+    header = f"{'Scale':<10}" + "".join([f"{m:<16}" for m in method_loss.keys()])
+    print(header)
+    print("-" * len(header))
+    for i, scale in enumerate(scales):
+        row = f"{scale:<10.3f}"
+        for method in method_loss.keys():
+            row += f"{method_loss[method][i]:<16.8f}"
+        print(row)
+
     if plot:
         marker_styles = ['o', 's', '^', 'v', '<', '>', 'p', 'h', 'D', '*', '+', 'x']
         fontsize = 20
@@ -115,9 +144,10 @@ def availability_plot(topology, num_dms_for_train=None, num_dms_for_test=None, c
         plt.xlabel("Demand Scale", fontsize=fontsize)
         plt.ylabel("Availability", fontsize=fontsize)
         plt.tick_params(axis='both', which='major', labelsize=fontsize)
+        # plt.ylim((0.999, 1.0001))
         plt.ylim((0.999, 1.0001))
         plt.legend()
-        plt.savefig("plot.pdf", bbox_inches='tight')
+        plt.savefig("plot_availability.pdf", bbox_inches='tight')
         
     # availability_vals = {alg : [] for alg in algorithms}
     # for topo in topologies:

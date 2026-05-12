@@ -1,11 +1,11 @@
 """
-Our main design of TUFTTE is in this file.
+TUFTTE predict-demand solver (separated from TUFTTESolver).
 """
 
 from utils.GurobiSolver import GurobiSolver
 from utils.riskMetric import validate_demand_loss, validate_unavailability
-from .TESolver import TESolver
 from .TEAVARSolver import TEAVARSolver
+from .TUFTTESolver_old import Dsolver, DemandLossModel
 
 import os
 import torch
@@ -20,15 +20,18 @@ DemandLoss = "D"
 Availability = "A"
 NUM_EPOCHS = 20
 
-class TUFTTESolver:
-    def __init__(self, network, hist_len=12, type=DemandLoss):
+
+class TUFTTEPredictSolver:
+    """Original TUFTTE: learn to predict demand, then optimize with CVXPY layer."""
+    def __init__(self, network, hist_len=12, type=Availability, suffix=""):
         self.network = network
         self.hist_len = hist_len
         self.name = network.name
         self.type = type
+        self.suffix = suffix
 
     def _compute_opts_to_train(self):
-        opts_dir = f"data/{self.name}/opts_{self.type}"
+        opts_dir = f"data/{self.name}/opts_{self.type}{self.suffix}"
         if not os.path.exists(opts_dir):
             os.mkdir(opts_dir)
 
@@ -59,23 +62,22 @@ class TUFTTESolver:
         f.close()
         opts = [float(opt) for opt in opts]
         return opts[-len(self.network.train_hists)+self.hist_len:]
-                
-    def _pre_train(self):
-        model_name = f"data/{self.name}/model_predict.pkl"
-        # train a neural network with three layers to predict at first
+
+    def _pre_train_predict(self):
+        model_name = f"data/{self.name}/model_predict_scale{self.network.scale}{self.suffix}.pkl"
         if not os.path.exists(model_name):
-            print("Training prediction model...")
+            print("Training demand prediction model...")
             data = PredictDataset(self.network.train_hists._tms, self.hist_len)
             train_examples = DataLoader(data, shuffle=True)
             l = len(self.network.train_hists._tms[0])
-            model = PredictNN(l, self.hist_len)
+            model = DemandPredictNN(l, self.hist_len)
             optimizer = torch.optim.Adam(model.parameters())
             for ep in range(NUM_EPOCHS):
                 with tqdm(train_examples) as tdata:
                     loss_sum = 0
                     count = 0
                     for (x, y) in tdata:
-                        tdata.set_description(f"Epoch {ep}")
+                        tdata.set_description(f"Epoch {ep} (Demand Predict)")
                         optimizer.zero_grad()
                         y_hat = model(x)
                         norm = torch.sum(y ** 2) / l
@@ -90,19 +92,19 @@ class TUFTTESolver:
 
         model = torch.load(model_name)
         return model
-    
+
     def _train(self):
         opts = self._compute_opts_to_train()
-        model_name = f"data/{self.name}/model_{self.type}.pkl"
+        model_name = f"data/{self.name}/model_{self.type}_predict_scale{self.network.scale}{self.suffix}.pkl"
         if not os.path.exists(model_name):
-            predict_model = self._pre_train()
-            print(f"Training {self.type} model...")
+            predict_model = self._pre_train_predict()
+            print(f"Training {self.type} model (predict-demand)...")
             data = TUFTTEDataset(self.network.train_hists._tms, opts, self.hist_len)
             train_examples = DataLoader(data, shuffle=True)
             if self.type == DemandLoss:
                 model = DemandLossModel(predict_model, self.network)
             elif self.type == Availability:
-                model = TEAVARModel(predict_model, self.network)
+                model = TEAVARPredictModel(predict_model, self.network)
             else:
                 raise NotImplementedError
             optimizer = torch.optim.Adam(model.parameters())
@@ -114,10 +116,12 @@ class TUFTTESolver:
                         tdata.set_description(f"Epoch {ep}")
                         optimizer.zero_grad()
                         x_star, _ = model(x)
+
                         if self.type == DemandLoss:
                             loss = validate_demand_loss(self.network, x_star, y[0]) - opt.item()
                         elif self.type == Availability:
                             loss = validate_unavailability(self.network, x_star, y[0]) - opt.item()
+
                         if opt.item() > 0.0:
                             loss /= opt.item()
                         if loss.item() > 0.0:
@@ -134,14 +138,14 @@ class TUFTTESolver:
 
     def fake_train(self):
         opts = self._compute_opts_to_train()
-        predict_model = self._pre_train()
+        predict_model = self._pre_train_predict()
         print(f"Trying to train {self.type} model...")
         data = TUFTTEDataset(self.network.train_hists._tms, opts, self.hist_len)
         train_examples = DataLoader(data, shuffle=True)
         if self.type == DemandLoss:
             model = DemandLossModel(predict_model, self.network)
         elif self.type == Availability:
-            model = TEAVARModel(predict_model, self.network)
+            model = TEAVARPredictModel(predict_model, self.network)
         else:
             raise NotImplementedError
         optimizer = torch.optim.Adam(model.parameters())
@@ -162,7 +166,7 @@ class TUFTTESolver:
                     pos += bias
                 else:
                     neg += bias
-            
+
             positive.append(pos)
             negative.append(neg)
             if self.type == DemandLoss:
@@ -180,7 +184,7 @@ class TUFTTESolver:
             ep.set_postfix(loss=loss.item(), pos=pos, neg=neg)
 
         return positive, negative
-    
+
     def output_prediction(self):
         model = self._train()
         model.eval()
@@ -195,7 +199,7 @@ class TUFTTESolver:
                     prediction.append(pred)
 
         return prediction
-    
+
     def solve(self):
         model = self._train()
         model.eval()
@@ -217,74 +221,11 @@ class TUFTTESolver:
                         x_star, pred = model(x)
                         self.network.add_sol(np.asarray(x_star))
 
-class Dsolver(TESolver):
-    def __init__(self, network, tm):
-        lp = GurobiSolver()
-        TESolver.__init__(self, lp, network)
-        self.tm = tm
-        self.L = lp.Variable(lb=0)
-        self.l_s = [lp.Variables(len(network.demands), lb=0) for _ in network.scenarios]
 
-    def add_demand_constraints(self):
-        for i, s in enumerate(self.network.scenarios):
-            for j, d in enumerate(self.network.demands.values()):
-                flow_on_tunnels = sum([t.v_flow for t in d.tunnels if t.pathstr not in s.failed_tunnels])
-                self.lp.Assert(flow_on_tunnels >= d.amount * self.network.scale - self.l_s[i][j])
- 
-    def add_loss_constraints(self):
-        for l in self.l_s:
-            self.lp.Assert(self.lp.Sum(l) <= self.L)
-
-    def solve(self):
-        self.add_demand_constraints()
-        self.add_edge_capacity_constraints()
-        self.add_loss_constraints()
-        self.Minimize(self.L)
-        obj = self.lp.Solve()
-        self.network.set_tunnel_flow(self.lp.Value)
-        return obj
-    
-class DemandLossModel(nn.Module):
-    def __init__(self, predict_net, network):
-        super(DemandLossModel, self).__init__()
-        self.predict_model = predict_net
-        num_demands = len(network.demands)
-        num_tunnels = len(network.tunnels)
-        num_scenarios = len(network.scenarios)
-        tm = cp.Parameter((1, num_demands), nonneg=True)
-        x = cp.Variable(num_tunnels, nonneg=True)
-        l = cp.Variable((num_scenarios, num_demands), nonneg=True)
-        L = cp.Variable(1, nonneg=True)
-        problem = self.construct_lp(tm, x, l, L, network)
-        assert problem.is_dpp()
-        self.cvxlayer = CvxpyLayer(problem, parameters=[tm], variables=[x, l, L])
-
-    def construct_lp(self, tm, x, l, L, network):
-        cons = []
-        # add demand constraints
-        for i, s in enumerate(network.scenarios):
-            for d in network.demands.values():
-                flow_on_tunnels = cp.sum([x[t.id] for t in d.tunnels if t.pathstr not in s.failed_tunnels])
-                cons.append(flow_on_tunnels >= tm[0][d.id] * network.scale - l[i][d.id])
-        # add edge capacity constraints
-        for edge in network.edges.values():
-            cons.append(edge.capacity >= cp.sum([x[t.id] for t in edge.tunnels]))
-        # add loss constraints
-        cons.append(cp.max(cp.sum(l, axis=1)) <= L)
-        problem = cp.Problem(cp.Minimize(L), cons)
-        return problem
-
-    def forward(self, hist_tms):
-        prediction = self.predict_model(hist_tms)
-        x_star, _, _ = self.cvxlayer(prediction)
-        return x_star, prediction
-    
-    def predict_only(self, hist_tms):
-        return self.predict_model(hist_tms)
-
-class TEAVARModel(nn.Module):
+class TEAVARPredictModel(nn.Module):
+    """Original TUFTTE: predict demand, then optimize with CVXPY layer."""
     def __init__(self, predict_net, network, beta=0.999):
-        super(TEAVARModel, self).__init__()
+        super(TEAVARPredictModel, self).__init__()
         self.predict_model = predict_net
         num_demands = len(network.demands)
         num_tunnels = len(network.tunnels)
@@ -296,33 +237,32 @@ class TEAVARModel(nn.Module):
         problem = self.construct_lp(tm, x, u, alpha, beta, network)
         assert problem.is_dpp()
         self.cvxlayer = CvxpyLayer(problem, parameters=[tm], variables=[x, u, alpha])
-        
-    def construct_lp(self, tm, x, u, alpha, beta, network):
+
+    def construct_lp(self, tm_pred, x, u, alpha, beta, network):
         cons = []
-        # add demand constraints
         for i, s in enumerate(network.scenarios):
             for d in network.demands.values():
                 flow_on_tunnels = cp.sum([x[t.id] for t in d.tunnels if t.pathstr not in s.failed_tunnels])
-                cons.append(flow_on_tunnels >= (1 - alpha - u[i]) * tm[0][d.id] * network.scale)
-        # add edge capacity constraints
+                cons.append(flow_on_tunnels >= (1 - alpha - u[i]) * tm_pred[0][d.id] * network.scale)
         for edge in network.edges.values():
             cons.append(edge.capacity >= cp.sum([x[t.id] for t in edge.tunnels]))
-        # define objective
         obj = cp.sum([u[i] * s.prob for i, s in enumerate(network.scenarios)]) / (1-beta) + alpha
         problem = cp.Problem(cp.Minimize(obj), cons)
         return problem
-    
+
     def forward(self, hist_tms):
         prediction = self.predict_model(hist_tms)
         x_star, _, _ = self.cvxlayer(prediction)
         return x_star, prediction
-    
+
     def predict_only(self, hist_tms):
         return self.predict_model(hist_tms)
 
-class PredictNN(nn.Module):
+
+class DemandPredictNN(nn.Module):
+    """Neural network that predicts demand directly from history."""
     def __init__(self, num_pairs, hist_len=12):
-        super(PredictNN, self).__init__()
+        super(DemandPredictNN, self).__init__()
         self.num_pairs = num_pairs
         self.hist_len = hist_len
         self.net = nn.Sequential(
@@ -337,7 +277,8 @@ class PredictNN(nn.Module):
         res = [torch.mean(x[0][self.hist_len * i: self.hist_len * (i+1)]) for i in range(self.num_pairs)]
         output = self.net(x) + torch.tensor(res)
         return output
-    
+
+
 class PredictDataset(Dataset):
     def __init__(self, tms, hist_len=12):
         X_ = []
@@ -348,10 +289,11 @@ class PredictDataset(Dataset):
 
     def __len__(self):
         return len(self.y)
-    
+
     def __getitem__(self, idx):
         return (self.X[idx], self.y[idx])
-    
+
+
 class TUFTTEDataset(Dataset):
     def __init__(self, tms, opts, hist_len=12):
         X_ = []
@@ -363,6 +305,6 @@ class TUFTTEDataset(Dataset):
 
     def __len__(self):
         return len(self.opt)
-    
+
     def __getitem__(self, idx):
         return (self.X[idx], self.y[idx], self.opt[idx])

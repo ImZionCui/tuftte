@@ -75,17 +75,28 @@ def parse_demands(network, scale=0.25):
 
         remove_demands_without_tunnels(network)
 
-def parse_histories(network, scale=1):
+def parse_histories(network, scale=1, num_train_files=None, num_test_files=None):
     """
     Parse histories into Network structure.
 
     parameters:
         network(Network): the Network without histories;
         scale(float): the scale factor of demands.
+        num_train_files(int): number of training .hist files to use (None for all)
+        num_test_files(int): number of testing .hist files to use (None for all)
     """
     num_nodes = len(network.nodes)
     train_hists = sorted(glob(f"data/{network.name}/train" + "/*.hist"))
     test_hists = sorted(glob(f"data/{network.name}/test" + "/*.hist"))
+    
+    # Limit number of files if specified
+    if num_train_files is not None:
+        train_hists = train_hists[:num_train_files]
+        print(f"Using {len(train_hists)} training .hist files: {[h.split('\\')[-1] for h in train_hists]}")
+    if num_test_files is not None:
+        test_hists = test_hists[:num_test_files]
+        print(f"Using {len(test_hists)} testing .hist files: {[h.split('\\')[-1] for h in test_hists]}")
+    
     network.train_hists = Histories(train_hists, "train", num_nodes)
     network.test_hists = Histories(test_hists, "test", num_nodes)
     network.set_scale(scale)

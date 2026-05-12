@@ -5,7 +5,7 @@ Details of prediction methods. (Figure 7, Figure 8, Figure 9)
 from utils.NetworkParser import *
 from utils.scenario import scenarios_with_k_failed_links
 from utils.prediction import predict_traffic_matrix, ALLMETHOD
-from algorithms.TUFTTESolver import TUFTTESolver
+from algorithms.TUFTTEParameterSolver import TUFTTEParameterSolver
 
 import numpy as np
 import torch
@@ -41,7 +41,8 @@ def compute_MSE(topology, num_dms_for_train=None, num_dms_for_test=None, hist_le
     solver = TUFTTESolver(network, hist_len=hist_len)
     predicted_tms = solver.output_prediction()
     for i, tm in enumerate(predicted_tms):
-        mse["TUFTTE"].append(torch.mean((tm[0] - real_tms[i]) ** 2).item())
+        tm_cpu = tm[0].cpu() if torch.is_tensor(tm[0]) else tm[0]
+        mse["TUFTTE"].append(torch.mean((torch.from_numpy(real_tms[i]) - tm_cpu) ** 2).item())
 
     if plot:
         fontsize = 20
@@ -99,12 +100,13 @@ def check_pos_neg(topology, num_dms_for_train=None, num_dms_for_test=None, hist_
     network.prepare_solution_format()
     scenarios_all = scenarios_with_k_failed_links(int(len(network.edges)/2), 1)
     network.set_scenario(scenarios_all)
-    solver = TUFTTESolver(network, hist_len=hist_len)
+    solver = TUFTTEParameterSolver(network, hist_len=hist_len)
     predicted_tms = solver.output_prediction()
     for i, tm in enumerate(predicted_tms):
         pos = 0
         neg = 0
-        for j, d in enumerate(tm[0]):
+        tm_cpu = tm[0].cpu() if torch.is_tensor(tm[0]) else tm[0]
+        for j, d in enumerate(tm_cpu):
             bias = d.item() - real_tms[i][j]
             if bias > 0:
                 pos += bias
@@ -154,11 +156,12 @@ def watch_pos_neg_variation(topology, num_dms_for_train=None, hist_len=12, deman
     network.prepare_solution_format()
     scenarios_all = scenarios_with_k_failed_links(int(len(network.edges)/2), 1)
     network.set_scenario(scenarios_all)
-    solver = TUFTTESolver(network, hist_len=hist_len)
+    solver = TUFTTEParameterSolver(network, hist_len=hist_len)
     positive, negative = solver.fake_train()
     print(positive)
     print(negative)
 
+    #plot:是否需要可视化
     if plot:
         negative = [-neg for neg in negative] # Absolute value
         fontsize = 20

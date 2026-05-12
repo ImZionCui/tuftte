@@ -1,5 +1,4 @@
 import tensorflow.keras.backend as K
-from tensorflow.keras.losses import mean_squared_error
 
 def frobenius_norm(y_pred, y_true):
     y = K.square(y_pred - y_true)
@@ -16,7 +15,8 @@ def leakage(y_pred, y_true):
     return res*100.
 
 
-def mean_square_percent(y_pred, y_true):
-    return mean_squared_error(y_pred*100, y_true*100)
+def mean_square_percent(y_true, y_pred):
+    # Implement MSE directly to avoid TF version-specific imports
+    return K.mean(K.square(y_pred * 100 - y_true * 100), axis=-1)
 
 

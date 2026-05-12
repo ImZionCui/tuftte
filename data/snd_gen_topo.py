@@ -8,9 +8,13 @@ from numpy.random import weibull
 # demand_matrices_dir = "directed-geant-uhlig-15min-over-4months-ALL-native"
 # output_dir = "GEANT"
 
-topology_file = "abilene.txt"
-demand_matrices_dir = "directed-abilene-zhang-5min-over-6months-ALL-native"
-output_dir = "Abilene"
+# topology_file = "abilene.txt"
+# demand_matrices_dir = "directed-abilene-zhang-5min-over-6months-ALL-native"
+# output_dir = "Abilene"
+
+topology_file = "geant.txt"
+demand_matrices_dir = "directed-geant-uhlig-15min-over-4months-ALL-native"
+output_dir = "GEANT"
 
 train_fraction = 0.75 #fraction of DMs for the training dataset
 num_of_dms_per_file = 2016
@@ -99,7 +103,14 @@ else:
                 assert len(edge_info) > 5
                 dm_src = nodes[edge_info[2]]
                 dm_dst = nodes[edge_info[3]]
-                edge_cap = float(edge_info[5]) * 1e6
+                # GEANT format: capacity is in parentheses (module_capacity at index 10)
+                # Try edge_info[5] first (Abilene format), if 0 or not valid, use edge_info[10]
+                pre_cap = float(edge_info[5])
+                if pre_cap > 0:
+                    edge_cap = pre_cap * 1e6
+                else:
+                    # Use module capacity from parentheses (GEANT format)
+                    edge_cap = float(edge_info[10]) * 1e6
                 if dm_src != dm_dst:
                     edges[(str(min(dm_src, dm_dst)), str(max(dm_src, dm_dst)))] = str(edge_cap)
                 

@@ -11,13 +11,19 @@ from algorithms.TESolver import TESolver
 from algorithms.FFCSolver import FFCSolver
 from algorithms.TEAVARSolver import TEAVARSolver
 from algorithms.DoteSolver import DoteSolver
-from algorithms.TUFTTESolver import TUFTTESolver, Dsolver
+from algorithms.TUFTTESolver_old import TUFTTESolver, Dsolver
+from algorithms.TUFTTEPredictSolver import TUFTTEPredictSolver
+from algorithms.TUFTTEParameterSolver import TUFTTEParameterSolver
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-PREDICTION_BASED_METHODS = ["MaxMin", "MLU", "FFC", "TEAVAR"]
-DIRECT_OPTIMIZATION = ["DOTE", "TUFTTE"]
+DemandLoss = "D"
+Availability = "A"
+
+# PREDICTION_BASED_METHODS = ["MaxMin", "MLU", "FFC", "TEAVAR"]
+# DIRECT_OPTIMIZATION = ["DOTE", "TUFTTE-Predict", "TUFTTE-Param"]
+DIRECT_OPTIMIZATION = ["DOTE"]
 
 def demand_loss_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=1, hist_len=12, demand_scale=1, plot=False):
     """
@@ -40,38 +46,45 @@ def demand_loss_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=
     network.set_scenario(scenarios_all)
     method_loss = {}
     predicted_tms = predict_traffic_matrix(network.train_hists._tms, network.test_hists._tms, hist_len, method=RF)
-    for method in PREDICTION_BASED_METHODS:
-        for tm in predicted_tms:
-            network.set_demand_amount(tm)
-            lp = GurobiSolver()
-            if method == "MaxMin":
-                solver = TESolver(lp, network)
-                solver.solve(obj=method)
-            elif method == "MLU":
-                solver = TESolver(lp, network)
-                solver.solve(obj=method)
-            elif method == "FFC":
-                solver = FFCSolver(lp, network, K)
-                solver.solve()
-            elif method == "TEAVAR":
-                solver = TEAVARSolver(lp, network)
-                solver.solve()
-            else:
-                print(f"Method {method} is not defined!")
-                return
+    
+    
+    
+    # for method in PREDICTION_BASED_METHODS:
+    #     for tm in predicted_tms:
+    #         network.set_demand_amount(tm)
+    #         lp = GurobiSolver()
+    #         if method == "MaxMin":
+    #             solver = TESolver(lp, network)
+    #             solver.solve(obj=method)
+    #         elif method == "MLU":
+    #             solver = TESolver(lp, network)
+    #             solver.solve(obj=method)
+    #         elif method == "FFC":
+    #             solver = FFCSolver(lp, network, K)
+    #             solver.solve()
+    #         elif method == "TEAVAR":
+    #             solver = TEAVARSolver(lp, network)
+    #             solver.solve()
+    #         else:
+    #             print(f"Method {method} is not defined!")
+    #             return
 
-            sol = [tunnel.v_flow_value for tunnel in network.solutions.tunnels]
-            network.add_sol(sol)
+    #         sol = [tunnel.v_flow_value for tunnel in network.solutions.tunnels]
+    #         network.add_sol(sol)
 
-        demand_loss, _ = calculate_risk(network, hist_len)
-        network.clear_sol()
-        method_loss[method] = demand_loss
+    #     demand_loss, _ = calculate_risk(network, hist_len)
+    #     network.clear_sol()
+    #     method_loss[method] = demand_loss
+
+
 
     for method in DIRECT_OPTIMIZATION:
         if method == "DOTE":
             solver = DoteSolver(network)
-        elif method == "TUFTTE":
-            solver = TUFTTESolver(network)
+        elif method == "TUFTTE-Predict":
+            solver = TUFTTEPredictSolver(network, hist_len=hist_len, type=DemandLoss)
+        elif method == "TUFTTE-Param":
+            solver = TUFTTEParameterSolver(network, hist_len=hist_len, type=DemandLoss)
         else:
             print(f"Method {method} is not defined!")
             return
@@ -81,16 +94,53 @@ def demand_loss_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=
         network.clear_sol()
         method_loss[method] = demand_loss
 
-    loss_reduction = 0.0
-    max_loss = 0.0
-    for i, loss in enumerate(method_loss["TUFTTE"]):
-        if loss > 0.0:
-            loss_reduction += (method_loss["FFC"][i] - loss) / method_loss["FFC"][i]
-            max_loss = max(max_loss, (method_loss["FFC"][i] - loss) / method_loss["FFC"][i])
-        elif method_loss["FFC"][i] > 0.0:
-            loss_reduction += 1
-    print("TUFTTE's demand loss is less than FFC's averagely by ", loss_reduction / len(method_loss["TUFTTE"]))
-    print("Maximum discrepancy: ", max_loss)
+    # 对比TUFTTE变体与FFC
+    for tuftte_method in ["TUFTTE-Predict", "TUFTTE-Param"]:
+        loss_reduction = 0.0
+        max_loss = 0.0
+        for i, loss in enumerate(method_loss[tuftte_method]):
+            if loss > 0.0:
+                loss_reduction += (method_loss["FFC"][i] - loss) / method_loss["FFC"][i]
+                max_loss = max(max_loss, (method_loss["FFC"][i] - loss) / method_loss["FFC"][i])
+            elif method_loss["FFC"][i] > 0.0:
+                loss_reduction += 1
+        print(f"{tuftte_method}'s demand loss is less than FFC's averagely by ", loss_reduction / len(method_loss[tuftte_method]))
+        print(f"{tuftte_method} maximum discrepancy: ", max_loss)
+    
+    # 对比TUFTTE-Predict和TUFTTE-Param
+    print("\n=== TUFTTE Variants Comparison ===")
+    diff_sum = 0.0
+    abs_diff_sum = 0.0
+    max_diff = 0.0
+    max_diff_idx = -1
+    param_wins = 0  # Param损失更低的样本数
+    predict_wins = 0  # Predict损失更低的样本数
+    
+    for i in range(len(method_loss["TUFTTE-Predict"])):
+        diff = method_loss["TUFTTE-Param"][i] - method_loss["TUFTTE-Predict"][i]
+        diff_sum += diff
+        abs_diff_sum += abs(diff)
+        
+        if abs(diff) > abs(max_diff):
+            max_diff = diff
+            max_diff_idx = i
+        
+        if diff < -0.01:  # Param更好
+            param_wins += 1
+        elif diff > 0.01:  # Predict更好
+            predict_wins += 1
+            
+        if i < 5:  # 打印前几个样本
+            print(f"Sample {i}: Param={method_loss['TUFTTE-Param'][i]:.2f}, Predict={method_loss['TUFTTE-Predict'][i]:.2f}, Diff={diff:.2f}")
+    
+    total_samples = len(method_loss['TUFTTE-Predict'])
+    print(f"\n总样本数: {total_samples}")
+    print(f"平均差异 (Param - Predict): {diff_sum / total_samples:.2f}")
+    print(f"平均绝对差异: {abs_diff_sum / total_samples:.2f}")
+    print(f"最大差异: {max_diff:.2f} (样本 {max_diff_idx})")
+    print(f"Param更优的样本数: {param_wins} ({param_wins/total_samples*100:.1f}%)")
+    print(f"Predict更优的样本数: {predict_wins} ({predict_wins/total_samples*100:.1f}%)")
+    print(f"相近的样本数: {total_samples - param_wins - predict_wins} ({(total_samples - param_wins - predict_wins)/total_samples*100:.1f}%)")
     
     if plot:
         fontsize = 20
@@ -103,10 +153,10 @@ def demand_loss_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=
         plt.xlabel("Demand loss (Mbps)", fontsize=fontsize)
         plt.ylabel("CDF", fontsize=fontsize)
         plt.tick_params(axis='both', which='major', labelsize=fontsize)
-        plt.xlim((1000, 12000))
+        plt.xlim((0, 10000))
         # plt.xlim((0,8000))
         plt.legend()
-        plt.savefig('plot.pdf', bbox_inches='tight')
+        plt.savefig('plot_dl_experiment.pdf', bbox_inches='tight')
 
 def noise_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=1, hist_len=12, demand_scale=1, noise=0.3, plot=False):
     """
@@ -163,8 +213,10 @@ def noise_expr(topology, num_dms_for_train=None, num_dms_for_test=None, K=1, his
     for method in DIRECT_OPTIMIZATION:
         if method == "DOTE":
             solver = DoteSolver(network)
-        elif method == "TUFTTE":
-            solver = TUFTTESolver(network)
+        elif method == "TUFTTE-Predict":
+            solver = TUFTTEPredictSolver(network, hist_len=hist_len, type=DemandLoss)
+        elif method == "TUFTTE-Param":
+            solver = TUFTTEParameterSolver(network, hist_len=hist_len, type=DemandLoss)
         else:
             print(f"Method {method} is not defined!")
             return
@@ -224,7 +276,7 @@ def noise_effect(topology, num_dms_for_train=None, num_dms_for_test=None, K=1, h
     noisy_tms = {}
     for noise in noises:
         noisy_tms[noise] = make_noise(real_tms, noise)
-    solver = TUFTTESolver(network)
+    solver = TUFTTEParameterSolver(network, hist_len=hist_len, type=DemandLoss)
     # train without noises, and compute network risks with noises
     solver.solve()
     dl_without_noise, _ = calculate_risk(network, hist_len)

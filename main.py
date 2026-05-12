@@ -9,6 +9,7 @@ and change the parameters in the file 'benchmark_const.py'.
 from benchmark_consts import *
 from availability import availability_plot
 from dl_experiment import demand_loss_expr, noise_expr, noise_effect
+from mlu_experiment import mlu_comparison_expr
 from motivation import ffc_under_uncertain_demand, teavar_under_uncertain_demand
 from prediction_details import compute_MSE, check_pos_neg, watch_pos_neg_variation
 from algorithms.DoteSolver import NeuralNetworkMaxUtil
@@ -27,6 +28,9 @@ if args.experiment == "availability":
 
 elif args.experiment == "dl_experiment":
     demand_loss_expr(TOPOLOGY, NUM_DMS_FOR_TRAIN, NUM_DMS_FOR_TEST, demand_scale=DEMAND_SCALE, plot=args.plot)
+
+elif args.experiment == "mlu_experiment":
+    mlu_comparison_expr(TOPOLOGY, NUM_DMS_FOR_TRAIN, NUM_DMS_FOR_TEST, demand_scale=DEMAND_SCALE, plot=args.plot)
 
 elif args.experiment == "ffc_experiment":
     ffc_under_uncertain_demand("GEANT", NUM_DMS_FOR_TRAIN, 50, plot=args.plot)

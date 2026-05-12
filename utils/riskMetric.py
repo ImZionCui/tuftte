@@ -61,32 +61,33 @@ def calculate_risk(network, hist_len=12):
 def validate_demand_loss(network, solution, real_tm):
     scenarios = network.scenarios
     real_tm.requires_grad_()
-    demand_loss = torch.tensor(0.0)
+    device = solution.device
+    demand_loss = torch.tensor(0.0, device=device)
     for s in scenarios:
         # compute amount of traffic on each tunnel
         routed = torch.zeros_like(solution)
         for demand in network.demands.values():
-            ratio = torch.sum(torch.tensor([solution[t.id] for t in demand.tunnels if t.pathstr not in s.failed_tunnels]))
+            ratio = torch.sum(torch.tensor([solution[t.id] for t in demand.tunnels if t.pathstr not in s.failed_tunnels], device=device))
             if ratio.item() == 0:
                 num_paths = len([t for t in demand.tunnels if t.pathstr not in s.failed_tunnels])
                 if num_paths == 0: continue
                 for t in demand.tunnels:
                     if t.pathstr not in s.failed_tunnels:
-                        routed[t.id] = real_tm[demand.id] * network.scale / num_paths
+                        routed[t.id] = real_tm[demand.id] * torch.tensor(network.scale, device=device) / num_paths
             else:
-                ratio = real_tm[demand.id] * network.scale / ratio
+                ratio = real_tm[demand.id] * torch.tensor(network.scale, device=device) / ratio
                 for t in demand.tunnels:
                     if t.pathstr not in s.failed_tunnels:
                         routed[t.id] = solution[t.id] * ratio
 
-        traffic_loss = torch.tensor(0.0)
+        traffic_loss = torch.tensor(0.0, device=device)
         # compute congestion loss
         for edge in network.edges.values():
-            edge_utilization = torch.tensor(0.0)
+            edge_utilization = torch.tensor(0.0, device=device)
             for t in edge.tunnels:
                 edge_utilization += routed[t.id]
             if edge_utilization.item() > edge.capacity:
-                traffic_loss += edge_utilization - torch.tensor(edge.capacity).float()
+                traffic_loss += edge_utilization - torch.tensor(edge.capacity, device=device).float()
         
         if traffic_loss.item() > demand_loss:
             demand_loss = traffic_loss
@@ -95,35 +96,34 @@ def validate_demand_loss(network, solution, real_tm):
 
 def validate_unavailability(network, solution, real_tm):
     scenarios = network.scenarios
-    real_tm.requires_grad_()
-    unavailability = torch.tensor(0.0)
+    device = solution.device
+    unavailability = torch.tensor(0.0, device=device)
     for s in scenarios:
         # compute amount of traffic on each tunnel
         routed = torch.zeros_like(solution)
         for demand in network.demands.values():
-            ratio = torch.sum(torch.tensor([solution[t.id] for t in demand.tunnels if t.pathstr not in s.failed_tunnels]))
-            if ratio.item() == 0:
-                num_paths = len([t for t in demand.tunnels if t.pathstr not in s.failed_tunnels])
-                if num_paths == 0: continue
-                for t in demand.tunnels:
-                    if t.pathstr not in s.failed_tunnels:
-                        routed[t.id] = real_tm[demand.id] * network.scale / num_paths
+            active_tunnels = [t for t in demand.tunnels if t.pathstr not in s.failed_tunnels]
+            if len(active_tunnels) == 0:
+                continue
+            active_idx = torch.tensor([t.id for t in active_tunnels], device=device, dtype=torch.long)
+            ratio_sum = torch.sum(solution[active_idx])
+            if ratio_sum.item() == 0:
+                num_paths = len(active_tunnels)
+                routed[active_idx] = (real_tm[demand.id] * torch.tensor(network.scale, device=device) / num_paths).float()
             else:
-                ratio = real_tm[demand.id] * network.scale / ratio
-                for t in demand.tunnels:
-                    if t.pathstr not in s.failed_tunnels:
-                        routed[t.id] = solution[t.id] * ratio
+                ratio = real_tm[demand.id] * torch.tensor(network.scale, device=device) / ratio_sum
+                routed[active_idx] = solution[active_idx] * ratio
 
-        traffic_loss = torch.tensor(0.0)
+        traffic_loss = torch.tensor(0.0, device=device)
         # compute congestion loss
         for edge in network.edges.values():
-            edge_utilization = torch.tensor(0.0)
+            edge_utilization = torch.tensor(0.0, device=device)
             for t in edge.tunnels:
                 edge_utilization += routed[t.id]
             if edge_utilization.item() > edge.capacity:
-                traffic_loss += edge_utilization - torch.tensor(edge.capacity).float()
+                traffic_loss += edge_utilization - torch.tensor(edge.capacity, device=device).float()
         
         if traffic_loss > 1e-3:
-            unavailability += traffic_loss * torch.tensor(s.prob) / traffic_loss.item()
+            unavailability += traffic_loss * torch.tensor(s.prob, device=device) / traffic_loss.item()
 
     return unavailability

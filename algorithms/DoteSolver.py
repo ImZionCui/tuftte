@@ -36,14 +36,17 @@ class DoteSolver:
                     
     def _compute_opts_to_train(self):
         name = self.network.name
-        if not os.path.exists(f"data/{name}/opts_train"):
-            # compute the optimum for DOTE to train
-            self._copy_data()
-            os.chdir(f"data/{name}")
-            test_opts_dir = "opts_test"
-            train_opts_dir = "opts_train"
-            os.mkdir(test_opts_dir)
-            os.mkdir(train_opts_dir)
+        # compute or aggregate optimums for DOTE to train
+        self._copy_data()
+        os.chdir(f"data/{name}")
+        test_opts_dir = "opts_test"
+        train_opts_dir = "opts_train"
+
+        if not os.path.exists(test_opts_dir) or not os.path.exists(train_opts_dir):
+            if not os.path.exists(test_opts_dir):
+                os.mkdir(test_opts_dir)
+            if not os.path.exists(train_opts_dir):
+                os.mkdir(train_opts_dir)
             subprocess.run(['python', '../../ml/sl_algos/evaluate.py', '--ecmp_topo', name, '--hist_len', '0', 
                             '--sl_type', 'stats_comm', '--compute_opts'], check=True)
             subprocess.run(['python', '../../ml/sl_algos/evaluate.py', '--ecmp_topo', name, '--hist_len', '0', 
@@ -54,31 +57,37 @@ class DoteSolver:
             subprocess.run(['python', '../../ml/sl_algos/evaluate.py', '--ecmp_topo', name, '--hist_len', '0', 
                             '--sl_type', 'eval', '--compute_opts', '--compute_opts_dir', 'train', '--opts_dir', train_opts_dir], check=True)
 
-            for d in ['test', 'train']:
-                opts_info = []
-                for file in sorted(glob(d + "/*.hist")):
-                    with open(file) as f:
-                        opts_info.append((file[:-4]+'opt', len(f.readlines())))
-                
-                input_file_idx = 0
-                for i in range(len(opts_info)):
-                    opt_res_for_actual_demands = []
-                    for _ in range(opts_info[i][1]):
-                        input_file_name = str(input_file_idx) + '.opt'
-                        with(open('opts_' + d + '/' + input_file_name)) as f:
-                            lines = f.read().splitlines()
-                            for line in lines:
-                                if ' Optimal result for actual demand: ' in line:
-                                    opt_res = float(line[line.find('demand: ')+7:])
-                                    opt_res_for_actual_demands.append(opt_res)
-                        
-                        input_file_idx += 1
-                        
-                    with open (opts_info[i][0], 'w') as f:
-                        for o in opt_res_for_actual_demands:
-                            f.write(str(o) + '\n')
+        # Always aggregate numbered opts_* files into per-hist .opt files if missing
+        for d in ['test', 'train']:
+            opts_info = []
+            for file in sorted(glob(d + "/*.hist")):
+                with open(file) as f:
+                    opts_info.append((file[:-4]+'opt', len(f.readlines())))
 
-            os.chdir("../..")
+            # Skip aggregation when target .opt already exists for all histories
+            all_exist = all([os.path.exists(info[0]) for info in opts_info])
+            if all_exist:
+                continue
+
+            input_file_idx = 0
+            for i in range(len(opts_info)):
+                opt_res_for_actual_demands = []
+                for _ in range(opts_info[i][1]):
+                    input_file_name = str(input_file_idx) + '.opt'
+                    with(open('opts_' + d + '/' + input_file_name)) as f:
+                        lines = f.read().splitlines()
+                        for line in lines:
+                            if ' Optimal result for actual demand: ' in line:
+                                opt_res = float(line[line.find('demand: ')+7:])
+                                opt_res_for_actual_demands.append(opt_res)
+
+                    input_file_idx += 1
+
+                with open (opts_info[i][0], 'w') as f:
+                    for o in opt_res_for_actual_demands:
+                        f.write(str(o) + '\n')
+
+        os.chdir("../..")
 
     def _train(self):
         name = self.network.name
@@ -86,10 +95,11 @@ class DoteSolver:
         if not os.path.exists(f"data/{name}/model_dote.pkl"):
             self._compute_opts_to_train()
             # Call 'dote.py' to train
-            subprocess.run(['python3', 'dote.py', '--ecmp_topo', name, '--opt_function', 
+            subprocess.run(['python', 'dote.py', '--ecmp_topo', name, '--opt_function', 
                         self.function, '--hist_len', str(self.hist_len)], check=True)
-        # load the model
-        model = torch.load(f"data/{name}/model_dote.pkl")
+        # load the model - import NeuralNetworkMaxUtil to ensure it's available during unpickling
+        from algorithms.DoteSolver import NeuralNetworkMaxUtil
+        model = torch.load(f"data/{name}/model_dote.pkl", weights_only=False)
         model.eval()
         os.chdir("../../..")
         return model

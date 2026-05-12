@@ -147,7 +147,7 @@ def process_args(args):
         #base_path = FolderPathCosts.BASE_PATH_LOCAL 
         base_path = os.getcwd()[:os.getcwd().find("networking_envs")] + "networking_envs"
         cplex_path = r"PATH_TO_CPLEX_LOCAL"
-        gurobi_path = r"PATH_TO_GUROBI_LOCAL"
+        gurobi_path = r"C:\gurobi910\win64\bin"
         oblivious_loc = r'PATH_TO_OBLIVIOUS_LOCAL'
     
     jar_cplex_loc = base_path + "/lib/runner_cplex.jar"
